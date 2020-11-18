@@ -6,7 +6,7 @@ from apartments.items import ApartmentsItem
 
 
 class CrawlSpider(scrapy.Spider):
-    name = 'spider_d'
+    name = 'spider'
     allowed_domains = ['otodom.pl']
 
     headers = {
@@ -20,24 +20,34 @@ class CrawlSpider(scrapy.Spider):
         'accept-language': 'pl,en-US;q=0.9,en;q=0.8',
     }
 
-    def __init__(self, page=1, limit=1000, *args, **kwargs):
+    def __init__(self, category, page=1, limit=1000, *args, **kwargs):
         super(CrawlSpider, self).__init__(*args, **kwargs)
-        self.page = page
-        self.limit = limit
+        self.page = int(page)
+        self.limit = int(limit)
+        categories = {
+            'a': 'sprzedaz/mieszkanie',
+            'b': 'wynajem/mieszkanie',
+            'c': 'sprzedaz/dom',
+            'd': 'wynajem/dom',
+        }
+        self.category = categories[category]
 
     def start_requests(self):
-        start_url = f'https://www.otodom.pl/wynajem/dom/?page={self.page}'
+        start_url = f'https://www.otodom.pl/{self.category}/?page={self.page}'
         yield scrapy.Request(start_url, headers=self.headers)
 
     def parse(self, response):
         ad_urls = response.xpath('//div[@class="offer-item-details"]/header/h3/a/@href').getall()
         for ad_url in ad_urls[::2]:  # Every second ad
-            yield scrapy.Request(ad_url, callback=self.parse_ad, headers=self.headers)
+            if self.limit > 0:
+                yield scrapy.Request(ad_url, callback=self.parse_ad, headers=self.headers)
+                self.limit -= 1
 
         # Pagination
         next_page_url = response.xpath('//li[@class="pager-next"]/a/@href').get()
-        if next_page_url:
-            # yield scrapy.Request(next_page_url, callback=self.parse, headers=self.headers)
+        if next_page_url and self.limit > 0:
+            print(next_page_url)
+            yield scrapy.Request(next_page_url, callback=self.parse, headers=self.headers)
             pass
 
     def parse_ad(self, response):
@@ -47,5 +57,5 @@ class CrawlSpider(scrapy.Spider):
             json_data = json.loads(raw_data).get('initialProps')
             item['title'] = json_data['data']['advert']['title']
             item['json'] = json.dumps(json_data)
-            item['timestamp'] = datetime.utcnow().isoformat(' ')
+            item['timestamp'] = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
             yield item
