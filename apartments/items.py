@@ -12,5 +12,7 @@ class ApartmentsItem(scrapy.Item):
     # define the fields for your item here like:
     # name = scrapy.Field()
     title = scrapy.Field()
-    json = scrapy.Field()
+    location = scrapy.Field()
+    price = scrapy.Field()
+    characteristics = scrapy.Field()
     timestamp = scrapy.Field()

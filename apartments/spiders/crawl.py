@@ -6,7 +6,7 @@ from apartments.items import ApartmentsItem
 
 
 class CrawlSpider(scrapy.Spider):
-    name = 'spider'
+    name = 'apartments'
     allowed_domains = ['otodom.pl']
 
     headers = {
@@ -20,9 +20,7 @@ class CrawlSpider(scrapy.Spider):
         'accept-language': 'pl,en-US;q=0.9,en;q=0.8',
     }
 
-    def __init__(self, category, page=1, limit=1000, *args, **kwargs):
-        super(CrawlSpider, self).__init__(*args, **kwargs)
-        self.page = int(page)
+    def __init__(self, category, limit=1000000, *args, **kwargs):
         self.limit = int(limit)
         categories = {
             'a': 'sprzedaz/mieszkanie',
@@ -31,31 +29,46 @@ class CrawlSpider(scrapy.Spider):
             'd': 'wynajem/dom',
         }
         self.category = categories[category]
+        super().__init__(*args, **kwargs)
+
+    @staticmethod
+    def generate_area_intervals():
+        """ Split the search into more manageable segments,
+            since there's no way to access more than 12000 records at once """
+        area_intervals = list()
+        # area_intervals.append('search%5Bfilter_float_m%3Ato%5D=30')  # Everything below 30m2
+        for i in range(54, 90, 4):  # Higher granularity from 30 to 90 m2
+            area_intervals.append(f'search%5Bfilter_float_m%3Afrom%5D={i}&search%5Bfilter_float_m%3Ato%5D={i+4}')
+        # for i in range(90, 300, 10):  # Low granularity from 90 to 300 m2
+        #     area_intervals.append(f'search%5Bfilter_float_m%3Afrom%5D={i}&search%5Bfilter_float_m%3Ato%5D={i+10}')
+        # area_intervals.append('search%5Bfilter_float_m%3Afrom%5D=300')
+        return area_intervals
 
     def start_requests(self):
-        start_url = f'https://www.otodom.pl/{self.category}/?page={self.page}'
-        yield scrapy.Request(start_url, headers=self.headers)
+        for area_interval in self.generate_area_intervals():
+            start_url = f'https://www.otodom.pl/{self.category}/?{area_interval}&nrAdsPerPage=72'
+            yield scrapy.Request(start_url, headers=self.headers, dont_filter=True)
 
     def parse(self, response):
+        # Pagination
+        next_page_url = response.xpath('//li[@class="pager-next"]/a/@href').get()
+        if next_page_url and self.limit > 0:
+            yield scrapy.Request(next_page_url, callback=self.parse, headers=self.headers)
+        # Actual listings
         ad_urls = response.xpath('//div[@class="offer-item-details"]/header/h3/a/@href').getall()
         for ad_url in ad_urls[::2]:  # Every second ad
             if self.limit > 0:
                 yield scrapy.Request(ad_url, callback=self.parse_ad, headers=self.headers)
-                self.limit -= 1
-
-        # Pagination
-        next_page_url = response.xpath('//li[@class="pager-next"]/a/@href').get()
-        if next_page_url and self.limit > 0:
-            print(next_page_url)
-            yield scrapy.Request(next_page_url, callback=self.parse, headers=self.headers)
-            pass
 
     def parse_ad(self, response):
         item = ApartmentsItem()
-        raw_data = response.xpath('/html/body/script[@id="server-app-state"]/text()').get()
-        if raw_data:
-            json_data = json.loads(raw_data).get('initialProps')
-            item['title'] = json_data['data']['advert']['title']
-            item['json'] = json.dumps(json_data)
+        raw_json = response.xpath('/html/body/script[@id="server-app-state"]/text()').get()
+        if raw_json:
+            json_data = json.loads(raw_json).get('initialProps').get('data').get('advert')
+            item['title'] = json_data['title']
+            item['location'] = json_data['location']['address']
+            item['price'] = json_data['price']['human_value'] + json_data['price'].get('suffix', '')  # Some categories have no suffix
+            item['characteristics'] = json.dumps(json_data['characteristics'])
             item['timestamp'] = datetime.utcnow().isoformat(sep=' ', timespec='seconds')
+            self.limit -= 1
             yield item
